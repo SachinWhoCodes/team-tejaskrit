@@ -26,7 +26,7 @@ import {
 } from "@/lib/firestore";
 import { generateTailoredLatex } from "@/lib/api";
 import type { ApplicationDoc, JobDoc, RecommendationBundleJob } from "@/lib/types";
-import { sourceLabel, type JobSourceLabel } from "@/lib/mappers";
+import { normalizeJobSourceKey, sourceLabel, type JobSourceLabel } from "@/lib/mappers";
 import { toast } from "@/hooks/use-toast";
 
 type JobUI = {
@@ -70,7 +70,7 @@ function toJobUI(id: string, j: JobDoc, score: number, reasons: string[], instit
     company: j.company,
     location: j.location,
     type: j.jobType,
-    source: sourceLabel(j.source, instituteVerified || j.visibility === "institute"),
+    source: sourceLabel(normalizeJobSourceKey(j as any), instituteVerified || j.visibility === "institute"),
     matchScore: score,
     matchReasons: reasons,
     lastSeen: timeAgo(lastSeenMs),
@@ -88,7 +88,7 @@ function bundleJobToUI(job: RecommendationBundleJob): JobUI {
     company: job.company,
     location: job.location,
     type: job.jobType as JobUI["type"],
-    source: sourceLabel((job.source as any) || "manual", job.visibility === "institute"),
+    source: sourceLabel(normalizeJobSourceKey(job as any), job.visibility === "institute"),
     matchScore: job.matchScore,
     matchReasons: job.matchReasons?.length ? job.matchReasons : ["Saved AI recommendation"],
     lastSeen: timeAgo(job.lastSeenAtMs),

@@ -33,7 +33,7 @@ import {
 } from "@/lib/firestore";
 import { generateTailoredLatex } from "@/lib/api";
 import type { JobDoc, RecommendationBundleJob } from "@/lib/types";
-import { sourceLabel } from "@/lib/mappers";
+import { normalizeJobSourceKey, sourceLabel } from "@/lib/mappers";
 import { toast } from "@/hooks/use-toast";
 
 const activityIcons: Record<string, React.ReactNode> = {
@@ -83,7 +83,7 @@ function bundleJobToUI(job: RecommendationBundleJob): JobUI {
     applyUrl: job.applyUrl,
     matchScore: job.matchScore,
     matchReasons: job.matchReasons?.length ? job.matchReasons : ["Saved AI recommendation"],
-    source: sourceLabel((job.source as any) || "manual", job.visibility === "institute"),
+    source: sourceLabel(normalizeJobSourceKey(job as any), job.visibility === "institute"),
     lastSeen: timeAgo(job.lastSeenAtMs),
   };
 }
@@ -379,7 +379,7 @@ function toJobUI(id: string, j: JobDoc, score: number, reasons: string[], instit
     applyUrl: j.applyUrl,
     matchScore: score,
     matchReasons: reasons,
-    source: sourceLabel(j.source, instituteVerified || j.visibility === "institute"),
+    source: sourceLabel(normalizeJobSourceKey(j as any), instituteVerified || j.visibility === "institute"),
     lastSeen: timeAgo(lastSeenMs),
   };
 }

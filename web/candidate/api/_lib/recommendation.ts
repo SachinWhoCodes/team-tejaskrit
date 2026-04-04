@@ -187,6 +187,27 @@ export function computeLocalRecommendation(job: any, user: any, profile: any) {
   return { score: Math.max(0, Math.min(100, score)), reasons };
 }
 
+
+
+function normalizeJobSource(job: any): string | undefined {
+  const direct = job?.source ? String(job.source).toLowerCase().trim() : "";
+  if (["scraped", "telegram", "tpo", "extension", "manual"].includes(direct)) return direct;
+
+  const sources = Array.isArray(job?.sources) ? job.sources.map((x: any) => String(x).toLowerCase()) : [];
+  if (sources.some((x: string) => x.includes("telegram"))) return "telegram";
+  if (sources.some((x: string) => x.includes("extension"))) return "extension";
+  if (sources.some((x: string) => x.includes("manual"))) return "manual";
+  if (sources.some((x: string) => x.includes("tpo") || x.includes("institute"))) return "tpo";
+  if (sources.length) return "scraped";
+
+  const sourceMetaId = job?.sourceMeta?.sourceId ? String(job.sourceMeta.sourceId).toLowerCase() : "";
+  if (sourceMetaId.includes("telegram")) return "telegram";
+  if (sourceMetaId.includes("extension")) return "extension";
+  if (sourceMetaId.includes("tpo") || sourceMetaId.includes("institute")) return "tpo";
+
+  if (job?.visibility === "private" || job?.ownerUid) return "manual";
+  return "scraped";
+}
 export function buildBundleJobSnapshot(args: {
   jobId: string;
   job: any;
@@ -203,7 +224,7 @@ export function buildBundleJobSnapshot(args: {
     location: job?.location ? String(job.location) : undefined,
     jobType: job?.jobType ? String(job.jobType) : undefined,
     applyUrl: job?.applyUrl ? String(job.applyUrl) : undefined,
-    source: job?.source ? String(job.source) : undefined,
+    source: normalizeJobSource(job),
     visibility: job?.visibility ? String(job.visibility) : undefined,
     lastSeenAtMs: jobSortKey(job),
     description: clip(String(job?.jdText ?? ""), 900),
