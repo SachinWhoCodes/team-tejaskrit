@@ -1,0 +1,166 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isMe(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function memberDoc(instId, uid) {
+      return /databases/$(database)/documents/institutes/$(instId)/members/$(uid);
+    }
+
+    function isInstituteMember(instId) {
+      return signedIn() && exists(memberDoc(instId, request.auth.uid));
+    }
+
+    function isTpo(instId) {
+      return isInstituteMember(instId) && (
+        get(memberDoc(instId, request.auth.uid)).data.role == 'tpo' ||
+        get(memberDoc(instId, request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function userInstitute(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.instituteId;
+    }
+
+    function canTpoTouchUser(uid) {
+      return signedIn() && userInstitute(uid) != null && isTpo(userInstitute(uid));
+    }
+
+    // ---------------- Users ----------------
+    match /users/{uid} {
+      allow create: if isMe(uid);
+      allow read, update, delete: if isMe(uid);
+
+      match /master_profile/{docId} {
+        allow read, write: if isMe(uid);
+      }
+
+      match /recommendations/{jobId} {
+        allow read, write: if isMe(uid);
+      }
+
+      // Candidate Notifications
+      match /notifications/{notifId} {
+        allow read: if isMe(uid);
+        allow create: if isMe(uid) || canTpoTouchUser(uid);
+        allow update, delete: if isMe(uid);
+      }
+    }
+
+    // ---------------- Institutes ----------------
+    match /institutes/{instituteId} {
+      allow read: if signedIn();
+      // For hackathon MVP: let signed-in users create institute docs.
+      allow create: if signedIn();
+      // Only TPO can update/delete institute settings.
+      allow update, delete: if isTpo(instituteId);
+
+      match /members/{uid} {
+        allow read: if isInstituteMember(instituteId);
+        // Students can create/update their own membership during onboarding
+        allow create, update: if isMe(uid) || isTpo(instituteId);
+        allow delete: if isMe(uid) || isTpo(instituteId);
+      }
+
+      match /announcements/{id} {
+        allow read: if isInstituteMember(instituteId);
+        allow create, update, delete: if isTpo(instituteId);
+      }
+
+      match /analytics/{docId} {
+        allow read: if isInstituteMember(instituteId);
+        allow write: if isTpo(instituteId);
+      }
+    }
+
+    // ---------------- Jobs ----------------
+    match /jobs/{jobId} {
+      allow read: if resource.data.visibility == 'public'
+        || (resource.data.visibility == 'institute' && isInstituteMember(resource.data.instituteId))
+        || (resource.data.visibility == 'private' && resource.data.ownerUid == request.auth.uid);
+
+      // Candidate creates private jobs
+      allow create: if signedIn() && (
+        (request.resource.data.visibility == 'private' && request.resource.data.ownerUid == request.auth.uid)
+        ||
+        // TPO creates institute jobs
+        (request.resource.data.visibility == 'institute' && isTpo(request.resource.data.instituteId) && request.resource.data.source == 'tpo')
+      );
+
+      // Candidate can update/delete their private jobs; TPO can update institute jobs
+      allow update, delete: if signedIn() && (
+        (resource.data.visibility == 'private' && resource.data.ownerUid == request.auth.uid)
+        ||
+        (resource.data.visibility == 'institute' && isTpo(resource.data.instituteId))
+      );
+    }
+
+    // ---------------- Applications ----------------
+    match /applications/{appId} {
+      // Candidate owns their applications; TPO can read applications of their institute
+      allow read: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || (resource.data.instituteId != null && isTpo(resource.data.instituteId))
+      );
+
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+
+      // Candidate can update their own application.
+      // TPO can update status/notes for institute apps BUT cannot change userId/jobId.
+      allow update: if signedIn() && (
+        (resource.data.userId == request.auth.uid)
+        || (
+          resource.data.instituteId != null
+          && isTpo(resource.data.instituteId)
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.jobId == resource.data.jobId
+        )
+      );
+
+      allow delete: if signedIn() && (resource.data.userId == request.auth.uid);
+
+      match /events/{eventId} {
+        allow read: if signedIn() && (
+          get(/databases/$(database)/documents/applications/$(appId)).data.userId == request.auth.uid
+          || (
+            get(/databases/$(database)/documents/applications/$(appId)).data.instituteId != null
+            && isTpo(get(/databases/$(database)/documents/applications/$(appId)).data.instituteId)
+          )
+        );
+
+        allow write: if signedIn() && (
+          get(/databases/$(database)/documents/applications/$(appId)).data.userId == request.auth.uid
+          || (
+            get(/databases/$(database)/documents/applications/$(appId)).data.instituteId != null
+            && isTpo(get(/databases/$(database)/documents/applications/$(appId)).data.instituteId)
+          )
+        );
+      }
+
+      match /logs/{logId} {
+        allow read: if signedIn() && (
+          get(/databases/$(database)/documents/applications/$(appId)).data.userId == request.auth.uid
+          || (
+            get(/databases/$(database)/documents/applications/$(appId)).data.instituteId != null
+            && isTpo(get(/databases/$(database)/documents/applications/$(appId)).data.instituteId)
+          )
+        );
+        allow write: if signedIn() && (
+          get(/databases/$(database)/documents/applications/$(appId)).data.userId == request.auth.uid
+          || (
+            get(/databases/$(database)/documents/applications/$(appId)).data.instituteId != null
+            && isTpo(get(/databases/$(database)/documents/applications/$(appId)).data.instituteId)
+          )
+        );
+      }
+    }
+
+    // Resume generation requests - Candidate only
+    match /resume_generations/{genId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
