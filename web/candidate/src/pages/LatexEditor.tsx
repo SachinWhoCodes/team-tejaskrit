@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { motion } from "framer-motion";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -12,6 +13,7 @@ import {
   RefreshCw,
   Save,
   Sparkles,
+  SwatchBook,
   Undo2,
 } from "lucide-react";
 
@@ -20,6 +22,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -29,6 +39,11 @@ import { toast } from "@/hooks/use-toast";
 import { aiAssistTailoredLatex, downloadResumePdf, getLatexPreviewPdf, saveTailoredLatex } from "@/lib/api";
 import { useResumeActivityProgress } from "@/hooks/useResumeActivityProgress";
 import { getApplicationById, getJobById, getMasterProfile, jobIdFromAny } from "@/lib/firestore";
+import {
+  buildApplyTemplatePrompt,
+  EDITOR_RESUME_TEMPLATES,
+  getEditorResumeTemplate,
+} from "@/lib/editorResumeTemplates";
 
 function formatTs(value: any) {
   const ms = value?.toMillis?.();
@@ -55,6 +70,9 @@ export default function LatexEditor() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState(EDITOR_RESUME_TEMPLATES[0]?.id ?? "anubhav-singh");
+  const [appliedTemplateId, setAppliedTemplateId] = useState<string | null>(null);
   const previewReq = useRef(0);
 
   const applicationQuery = useQuery({
@@ -207,6 +225,36 @@ export default function LatexEditor() {
 
   const title = jobQuery.data?.title || "Tailored Resume";
   const company = jobQuery.data?.company || "";
+  const selectedTemplate = getEditorResumeTemplate(selectedTemplateId);
+  const appliedTemplate = appliedTemplateId ? getEditorResumeTemplate(appliedTemplateId) : null;
+
+  const handleApplyTemplate = async () => {
+    if (!applicationId) return;
+    if (!draftLatex.trim()) {
+      toast({ title: "No resume to format", description: "Generate or load a tailored resume first." });
+      return;
+    }
+
+    try {
+      const result = await runWithProgress(
+        {
+          kind: "generate",
+          title: `Applying ${selectedTemplate.shortLabel} template`,
+          description: "Reformatting the current resume draft into the selected compact LaTeX template.",
+        },
+        () => aiAssistTailoredLatex({ applicationId, prompt: buildApplyTemplatePrompt(selectedTemplate), latex: draftLatex })
+      );
+      setDraftLatex(result.latex);
+      setAppliedTemplateId(selectedTemplate.id);
+      setTemplateDialogOpen(false);
+      toast({
+        title: "Template applied",
+        description: `${selectedTemplate.name} has been applied in the editor. Review and save when ready.`,
+      });
+    } catch (e: any) {
+      toast({ title: "Template apply failed", description: e?.message ?? "Could not apply template.", variant: "destructive" });
+    }
+  };
 
   return (
     <AppLayout>
@@ -230,6 +278,9 @@ export default function LatexEditor() {
             <Badge variant={isDirty ? "secondary" : "default"}>{isDirty ? "Unsaved changes" : "Saved"}</Badge>
             <Button variant="outline" className="gap-2" onClick={() => void refreshPreview()} disabled={previewLoading}>
               {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />} Refresh Preview
+            </Button>
+            <Button variant="outline" className="gap-2" onClick={() => setTemplateDialogOpen(true)} disabled={!draftLatex.trim() || aiLoading}>
+              <SwatchBook className="h-4 w-4" /> {appliedTemplate ? "Change Template" : "Apply Template"}
             </Button>
             <Button
               variant="outline"
@@ -282,7 +333,7 @@ export default function LatexEditor() {
                 </div>
 
                 <div className="p-4 border-b border-border bg-background/70">
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <div>
                       <Label className="text-xs text-muted-foreground">Role</Label>
                       <div className="text-sm font-medium mt-1">{title}</div>
@@ -295,6 +346,15 @@ export default function LatexEditor() {
                       <Label className="text-xs text-muted-foreground">Master Profile</Label>
                       <div className="text-sm font-medium mt-1">
                         {profileQuery.data?.headline || profileQuery.data?.summary?.slice(0, 40) || "Linked"}
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Editor Template</Label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <Badge variant="secondary">{appliedTemplate?.shortLabel || "Current Draft"}</Badge>
+                        <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setTemplateDialogOpen(true)}>
+                          {appliedTemplate ? "Change" : "Apply"}
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -399,6 +459,72 @@ export default function LatexEditor() {
           </>
         )}
       </div>
+
+      <Dialog open={templateDialogOpen} onOpenChange={setTemplateDialogOpen}>
+        <DialogContent className="sm:max-w-3xl overflow-hidden border-primary/15 bg-background/95 backdrop-blur">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SwatchBook className="h-5 w-5 text-primary" /> Apply resume template
+            </DialogTitle>
+            <DialogDescription>
+              This only reformats the current LaTeX draft inside the editor. Your existing generation flow stays unchanged until you save.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            {EDITOR_RESUME_TEMPLATES.map((template, index) => {
+              const active = selectedTemplateId === template.id;
+              return (
+                <motion.button
+                  key={template.id}
+                  type="button"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.22, delay: index * 0.05 }}
+                  whileHover={{ y: -3, scale: 1.01 }}
+                  whileTap={{ scale: 0.99 }}
+                  onClick={() => setSelectedTemplateId(template.id)}
+                  className={[
+                    "rounded-3xl border p-5 text-left transition-all",
+                    active ? "border-primary bg-primary/8 shadow-[0_0_0_1px_hsl(var(--primary)/0.18)]" : "border-border bg-card hover:border-primary/30",
+                  ].join(" ")}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-semibold">{template.name}</h3>
+                        {active ? <Badge>Selected</Badge> : null}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">{template.byline}</p>
+                    </div>
+                    <div className="h-10 w-10 rounded-2xl border border-primary/15 bg-primary/10 flex items-center justify-center text-primary">
+                      <SwatchBook className="h-4 w-4" />
+                    </div>
+                  </div>
+                  <p className="mt-4 text-sm text-muted-foreground leading-6">{template.description}</p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {template.highlights.map((item) => (
+                      <Badge key={item} variant="secondary" className="rounded-full">{item}</Badge>
+                    ))}
+                  </div>
+                </motion.button>
+              );
+            })}
+          </div>
+
+          <div className="rounded-2xl border border-primary/10 bg-primary/5 px-4 py-3 text-sm text-muted-foreground">
+            Selected template: <span className="font-medium text-foreground">{selectedTemplate.name}</span>. Applying it will rewrite the current editor draft into a compact one-page template and keep preview/save working exactly as before.
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTemplateDialogOpen(false)}>Cancel</Button>
+            <Button className="gap-2" onClick={handleApplyTemplate} disabled={!draftLatex.trim() || aiLoading}>
+              {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <SwatchBook className="h-4 w-4" />} Apply {selectedTemplate.shortLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {resumeActivityModal}
     </AppLayout>
   );
