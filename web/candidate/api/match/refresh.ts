@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getAdminDb } from "../_lib/firebaseAdmin.js";
 import { requireUser } from "../_lib/auth.js";
 import { groqChatJson } from "../_lib/groq.js";
+import { scoreLocalJob } from "../_lib/matchLocal.js";
 import { stripUndefinedDeep } from "../_lib/util.js";
 
 type Body = { jobIds: string[] };
@@ -48,7 +49,9 @@ function buildCandidateText(user: any, profile: any) {
       `Experience: ${exp}`,
       `Projects: ${projects}`,
       masterText ? `MasterText: ${masterText}` : "",
-    ].filter(Boolean).join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n"),
     8000
   );
 }
@@ -59,12 +62,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const authed = await requireUser(req);
     const body = (req.body ?? {}) as Body;
-    const jobIds = Array.isArray(body.jobIds) ? body.jobIds.filter(Boolean).slice(0, 12) : [];
-    if (jobIds.length === 0) return bad(res, 400, "jobIds required (max 12)");
+    const requestedJobIds = Array.isArray(body.jobIds)
+      ? Array.from(new Set(body.jobIds.map((id) => String(id || "").replace(/^\/?jobs\//, "")).filter(Boolean))).slice(0, 8)
+      : [];
+    if (requestedJobIds.length === 0) return bad(res, 400, "jobIds required (max 8)");
 
     const db = getAdminDb();
 
-    // user + profile
     const userSnap = await db.collection("users").doc(authed.uid).get();
     if (!userSnap.exists) return bad(res, 404, "User not found");
     const user = userSnap.data() || {};
@@ -75,22 +79,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!profileSnap.exists) return bad(res, 400, "Master profile missing");
     const profile = profileSnap.data() || {};
 
-    const candidateText = buildCandidateText(user, profile);
-
-    // job docs
     const jobDocs = await Promise.all(
-      jobIds.map(async (id) => {
+      requestedJobIds.map(async (id) => {
         const snap = await db.collection("jobs").doc(id).get();
         if (!snap.exists) return null;
-        const j = snap.data() || {};
+        const data = snap.data() || {};
+        const local = scoreLocalJob({ user, profile, id, data });
         return {
           jobId: id,
-          title: j.title ?? "",
-          company: j.company ?? "",
-          location: j.location ?? "",
-          jobType: j.jobType ?? "",
-          tags: Array.isArray(j.tags) ? j.tags.slice(0, 20) : [],
-          jdText: clip(String(j.jdText ?? ""), 2000),
+          title: data.title ?? "",
+          company: data.company ?? "",
+          location: data.location ?? "",
+          jobType: data.jobType ?? "",
+          tags: Array.isArray(data.tags) ? data.tags.slice(0, 20) : [],
+          jdText: clip(String(data.jdText ?? ""), 1500),
+          localScore: local.score,
+          localReasons: local.reasons,
+          profileHash: local.profileHash,
+          jobHash: local.jobHash,
         };
       })
     );
@@ -98,9 +104,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const jobs = jobDocs.filter(Boolean) as any[];
     if (!jobs.length) return bad(res, 404, "No jobs found");
 
+    const candidateText = buildCandidateText(user, profile);
     const system =
-      "You are an expert ATS matcher. Score candidate vs each job. " +
-      "Return STRICT JSON only. Provide score 0-100 and 3-5 short reasons per job. " +
+      "You are an expert ATS matcher. Refine job relevance for this candidate. " +
+      "Respect the local score and only adjust when the evidence is clear. " +
+      "Return STRICT JSON only with score 0-100 and 2-4 short reasons per job. " +
       "Do not invent candidate experience.";
 
     const prompt = `
@@ -119,59 +127,75 @@ Return JSON exactly like:
 `;
 
     const out = await groqChatJson({
-      model: "llama-3.3-70b-versatile",
+      model: "llama-3.1-8b-instant",
       messages: [
         { role: "system", content: system },
         { role: "user", content: prompt },
       ],
       temperature: 0.1,
-      maxTokens: 1800,
+      maxTokens: 1100,
     });
 
     const results: Array<{ jobId: string; score: number; reasons: string[] }> = Array.isArray(out?.results) ? out.results : [];
     if (!results.length) return bad(res, 500, "Groq returned empty results");
 
+    const localById = new Map(jobs.map((job) => [job.jobId, job]));
     const now = new Date();
-
-    // write /users/{uid}/recommendations/{jobId}
     const batch = db.batch();
-    for (const r of results) {
-      if (!r?.jobId) continue;
-      const score = Math.max(0, Math.min(100, Number(r.score ?? 0)));
-      const reasons = Array.isArray(r.reasons) ? r.reasons.map(String).slice(0, 6) : [];
+    const payloadResults: Array<{ jobId: string; score: number; reasons: string[]; localScore: number }> = [];
 
-      const recRef = db.collection("users").doc(authed.uid).collection("recommendations").doc(r.jobId);
+    for (const result of results) {
+      if (!result?.jobId) continue;
+      const local = localById.get(result.jobId);
+      if (!local) continue;
+
+      const aiScore = Math.max(0, Math.min(100, Number(result.score ?? 0)));
+      const localScore = Math.max(0, Math.min(100, Number(local.localScore ?? 0)));
+      const finalScore = Math.round(localScore * 0.6 + aiScore * 0.4);
+      const aiReasons = Array.isArray(result.reasons) ? result.reasons.map(String).slice(0, 4) : [];
+      const reasons = (aiReasons.length ? aiReasons : local.localReasons).slice(0, 4);
+
+      const recRef = db.collection("users").doc(authed.uid).collection("recommendations").doc(result.jobId);
       batch.set(
         recRef,
         stripUndefinedDeep({
-          jobId: r.jobId,
-          score,
+          jobId: result.jobId,
+          localScore,
+          aiScore,
+          finalScore,
+          score: finalScore,
           reasons,
+          localReasons: local.localReasons,
+          aiReasons,
           computedAt: now,
-          source: "groq:v1",
+          source: "groq:v2",
+          model: "llama-3.1-8b-instant",
+          profileHash: local.profileHash,
+          jobHash: local.jobHash,
         }),
         { merge: true }
       );
 
-      // OPTIONAL: if application exists, also update matchScore/matchReasons so tracker uses same
-      const appId = `${authed.uid}__${r.jobId}`;
+      const appId = `${authed.uid}__${result.jobId}`;
       const appRef = db.collection("applications").doc(appId);
       batch.set(
         appRef,
         stripUndefinedDeep({
           userId: authed.uid,
           instituteId: user?.instituteId ?? null,
-          jobId: r.jobId,
-          matchScore: score,
+          jobId: result.jobId,
+          matchScore: finalScore,
           matchReasons: reasons,
           updatedAt: now,
         }),
         { merge: true }
       );
-    }
-    await batch.commit();
 
-    return res.status(200).json({ ok: true, results });
+      payloadResults.push({ jobId: result.jobId, score: finalScore, reasons, localScore });
+    }
+
+    await batch.commit();
+    return res.status(200).json({ ok: true, results: payloadResults });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message ?? "Unknown error" });
   }

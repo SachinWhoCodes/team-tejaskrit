@@ -108,7 +108,16 @@ export interface JobDoc {
 export interface RecommendationDoc {
   jobId: string; // "jobs/{id}" or just id (support both)
   score: number;
+  localScore?: number;
+  aiScore?: number;
+  finalScore?: number;
   reasons?: string[];
+  localReasons?: string[];
+  aiReasons?: string[];
+  source?: string;
+  model?: string;
+  profileHash?: string;
+  jobHash?: string;
   computedAt?: Timestamp;
 }
 
