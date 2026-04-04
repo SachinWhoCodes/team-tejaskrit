@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/AuthProvider";
 import { toast } from "@/hooks/use-toast";
 import { aiAssistTailoredLatex, downloadResumePdf, getLatexPreviewPdf, saveTailoredLatex } from "@/lib/api";
+import { useResumeActivityProgress } from "@/hooks/useResumeActivityProgress";
 import { getApplicationById, getJobById, getMasterProfile, jobIdFromAny } from "@/lib/firestore";
 
 function formatTs(value: any) {
@@ -45,6 +46,7 @@ export default function LatexEditor() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { authUser } = useAuth();
+  const { runWithProgress, modal: resumeActivityModal } = useResumeActivityProgress();
 
   const [draftLatex, setDraftLatex] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -234,7 +236,7 @@ export default function LatexEditor() {
               className="gap-2"
               onClick={async () => {
                 try {
-                  await downloadResumePdf(applicationId);
+                  await runWithProgress({ kind: "download", description: "Compiling and downloading the latest tailored PDF from this editor." }, () => downloadResumePdf(applicationId));
                 } catch (e: any) {
                   toast({ title: "Download failed", description: e?.message ?? "Could not download PDF.", variant: "destructive" });
                 }
@@ -397,6 +399,7 @@ export default function LatexEditor() {
           </>
         )}
       </div>
+      {resumeActivityModal}
     </AppLayout>
   );
 }

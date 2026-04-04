@@ -25,6 +25,7 @@ import {
   upsertApplicationForJob,
 } from "@/lib/firestore";
 import { generateTailoredLatex } from "@/lib/api";
+import { useResumeActivityProgress } from "@/hooks/useResumeActivityProgress";
 import type { ApplicationDoc, JobDoc, RecommendationBundleJob } from "@/lib/types";
 import { normalizeJobSourceKey, sourceLabel, type JobSourceLabel } from "@/lib/mappers";
 import { toast } from "@/hooks/use-toast";
@@ -104,6 +105,7 @@ const CONSENT_KEY = "tejaskrit_resume_consent_hide";
 export default function Jobs() {
   const { authUser, userDoc } = useAuth();
   const qc = useQueryClient();
+  const { runWithProgress, modal: resumeActivityModal } = useResumeActivityProgress();
 
   const [search, setSearch] = useState("");
   const [minScore, setMinScore] = useState(0);
@@ -261,11 +263,18 @@ export default function Jobs() {
   const actionGenerateResume = async (job: JobUI) => {
     if (!authUser?.uid) return;
     await ensureConsentThen(async () => {
-      await generateTailoredLatex({
-        jobId: job.id,
-        matchScore: job.matchScore,
-        matchReasons: job.matchReasons,
-      });
+      await runWithProgress(
+        {
+          kind: "generate",
+          description: `Preparing a tailored resume for ${job.title} at ${job.company}.`,
+        },
+        () =>
+          generateTailoredLatex({
+            jobId: job.id,
+            matchScore: job.matchScore,
+            matchReasons: job.matchReasons,
+          })
+      );
       toast({
         title: "Tailored resume generated",
         description: "LaTeX saved in tracker. Open Resume → Tailored.",
@@ -509,6 +518,7 @@ export default function Jobs() {
             </div>
           </DialogContent>
         </Dialog>
+      {resumeActivityModal}
       </div>
     </AppLayout>
   );

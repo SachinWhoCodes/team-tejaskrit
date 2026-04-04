@@ -32,6 +32,7 @@ import {
   listUpcomingEvents,
 } from "@/lib/firestore";
 import { generateTailoredLatex } from "@/lib/api";
+import { useResumeActivityProgress } from "@/hooks/useResumeActivityProgress";
 import type { JobDoc, RecommendationBundleJob } from "@/lib/types";
 import { normalizeJobSourceKey, sourceLabel } from "@/lib/mappers";
 import { toast } from "@/hooks/use-toast";
@@ -90,6 +91,7 @@ function bundleJobToUI(job: RecommendationBundleJob): JobUI {
 
 export default function Dashboard() {
   const { authUser, userDoc } = useAuth();
+  const { runWithProgress, modal: resumeActivityModal } = useResumeActivityProgress();
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
@@ -167,7 +169,13 @@ export default function Dashboard() {
   const onGenerateResumeQuick = async (job: JobUI) => {
     if (!authUser?.uid) return;
     try {
-      await generateTailoredLatex({ jobId: job.id, matchScore: job.matchScore, matchReasons: job.matchReasons });
+      await runWithProgress(
+        {
+          kind: "generate",
+          description: `Preparing a tailored resume for ${job.title} at ${job.company}.`,
+        },
+        () => generateTailoredLatex({ jobId: job.id, matchScore: job.matchScore, matchReasons: job.matchReasons })
+      );
       toast({ title: "Tailored resume generated", description: "LaTeX saved. Download from Resume → Tailored." });
     } catch (e: any) {
       toast({ title: "Failed", description: e?.message ?? "Could not request resume.", variant: "destructive" });
@@ -364,6 +372,7 @@ export default function Dashboard() {
           </section>
         </div>
       </div>
+      {resumeActivityModal}
     </AppLayout>
   );
 }
