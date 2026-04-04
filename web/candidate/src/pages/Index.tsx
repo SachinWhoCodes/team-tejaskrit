@@ -402,3 +402,4 @@ function computeKPIs(jobs: JobUI[], apps: Array<{ id: string; data: any }>, upco
     { label: "Offers", value: String(offers), icon: Trophy, color: "text-success" },
   ];
 }
+
