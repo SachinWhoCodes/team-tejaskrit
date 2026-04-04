@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/AuthProvider";
 import { toast } from "@/hooks/use-toast";
 import { aiAssistTailoredLatex, downloadResumePdf, getLatexPreviewPdf, saveTailoredLatex } from "@/lib/api";
+import { useResumeActivityProgress } from "@/hooks/useResumeActivityProgress";
 import { getApplicationById, getJobById, getMasterProfile, jobIdFromAny } from "@/lib/firestore";
 
 function formatTs(value: any) {
@@ -45,6 +46,7 @@ export default function LatexEditor() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { authUser } = useAuth();
+  const { runWithProgress, modal: resumeActivityModal } = useResumeActivityProgress();
 
   const [draftLatex, setDraftLatex] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -234,7 +236,7 @@ export default function LatexEditor() {
               className="gap-2"
               onClick={async () => {
                 try {
-                  await downloadResumePdf(applicationId);
+                  await runWithProgress({ kind: "download", description: "Compiling and downloading the latest tailored PDF from this editor." }, () => downloadResumePdf(applicationId));
                 } catch (e: any) {
                   toast({ title: "Download failed", description: e?.message ?? "Could not download PDF.", variant: "destructive" });
                 }
@@ -311,11 +313,11 @@ export default function LatexEditor() {
 
                 <Separator />
 
-                {/* <div className="p-4 bg-muted/20 space-y-3">
+                <div className="p-4 bg-muted/20 space-y-3">
                   <div className="flex items-center gap-2">
                     <Bot className="h-4 w-4" />
                     <span className="font-semibold text-sm">AI Assist</span>
-                    <Badge variant="secondary">Tejas</Badge>
+                    <Badge variant="secondary">Tejas Assist</Badge>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     Ask AI to rewrite bullets, emphasize a stack, shorten sections, improve ATS relevance, or retarget the resume to this role.
@@ -336,7 +338,7 @@ export default function LatexEditor() {
                       </Button>
                     </div>
                   </div>
-                </div> */}
+                </div>
               </Card>
 
               <Card className="card-elevated p-0 overflow-hidden min-h-[72vh] flex flex-col">
@@ -397,6 +399,7 @@ export default function LatexEditor() {
           </>
         )}
       </div>
+      {resumeActivityModal}
     </AppLayout>
   );
 }

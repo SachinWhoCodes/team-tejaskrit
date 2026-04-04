@@ -52,6 +52,7 @@ import {
   deleteUserData,
 } from "@/lib/firestore";
 import { downloadResumePdf, generateTailoredLatex } from "@/lib/api";
+import { useResumeActivityProgress } from "@/hooks/useResumeActivityProgress";
 import type { MasterProfileDoc, UserDoc } from "@/lib/types";
 import { computeMatch } from "@/lib/match";
 import { toast } from "@/hooks/use-toast";
@@ -115,6 +116,7 @@ const EMPTY_PROFILE: MasterProfileDoc = {
 export default function Resume() {
   const { authUser, userDoc, signOut, refreshUserDoc } = useAuth();
   const qc = useQueryClient();
+  const { runWithProgress, modal: resumeActivityModal } = useResumeActivityProgress();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
 
@@ -320,7 +322,7 @@ export default function Resume() {
         return;
       }
 
-      await generateTailoredLatex({ jobId });
+      await runWithProgress({ kind: "generate", description: "Creating and saving your tailored resume in the tracker." }, () => generateTailoredLatex({ jobId }));
 
       toast({
         title: "Tailored resume generated",
@@ -340,7 +342,7 @@ export default function Resume() {
   const regenerate = async (r: TailoredResumeUI) => {
     if (!authUser?.uid) return;
     try {
-      await generateTailoredLatex({ jobId: r.jobId });
+      await runWithProgress({ kind: "generate", description: `Refreshing the tailored resume for ${r.role} at ${r.company}.` }, () => generateTailoredLatex({ jobId: r.jobId }));
       toast({ title: "Regenerated", description: "Updated LaTeX stored. Download again." });
       qc.invalidateQueries({ queryKey: ["applications", authUser.uid] });
     } catch (e: any) {
@@ -831,7 +833,7 @@ export default function Resume() {
                                   toast({ title: "Not ready", description: "Generate resume first." });
                                   return;
                                 }
-                                await downloadResumePdf(r.applicationId);
+                                await runWithProgress({ kind: "download", description: `Downloading the latest PDF for ${r.role} at ${r.company}.` }, () => downloadResumePdf(r.applicationId));
                               } catch (e: any) {
                                 toast({ title: "Download failed", description: e?.message ?? "Try again.", variant: "destructive" });
                               }
@@ -1083,6 +1085,7 @@ export default function Resume() {
         </Dialog>
 
       </div>
+      {resumeActivityModal}
     </AppLayout>
   );
 }
